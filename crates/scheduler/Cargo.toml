@@ -1,0 +1,14 @@
+[package]
+name = "scheduler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tonic.workspace = true
+prost.workspace = true
+serde_json.workspace = true
+flproto = { path = "../flproto" }
+flcommon = { path = "../flcommon" }
+# Plain-HTTP client for the OPA sidecar. No TLS stack => no OpenSSL in the image.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }

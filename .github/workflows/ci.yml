@@ -1,0 +1,20 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  rust-and-analysis:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked --workspace
+      - run: cargo test --workspace --locked
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r analysis/requirements.txt pytest
+      - run: python -m pytest -q analysis/tests
+      # Re-run the core benchmark suite on every commit (exam Sec. 4.4): E1 smoke on the simulator.
+      - run: python scripts/run_experiments.py --tier sim --quick --exp E1 --results-root /tmp/ci_results
+      - run: python analysis/analyze.py --results /tmp/ci_results --topology config/topology.json --out /tmp/out --paper-out /tmp/tex
+      - name: Generated deploy files are up to date
+        run: python scripts/gen_deploy.py && git diff --exit-code docker-compose.yml deploy/k3s/flreg.yaml

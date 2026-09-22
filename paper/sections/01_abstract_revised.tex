@@ -1,0 +1,16 @@
+% Replaces the current abstract. It claims ONLY what the prototype and experiments support.
+% Fill the [..] slots from paper/generated/macros.tex and results/tables/REPORT.md AFTER the runs.
+Financial regulators need machine-learning oversight of data that data-residency and confidentiality rules
+prevent them from centralising. Federated learning keeps raw data at each institution, but a federation spanning
+resource-constrained edge nodes and cloud nodes must still decide, every round, \emph{which nodes may and
+should participate}. We present a regulatory-aware, resource-aware orchestration framework in which residency
+and licensing eligibility is a hard filter, evaluated per round through an Open Policy Agent (OPA) policy,
+applied before a composite capability--bandwidth--latency--availability score. We implement the selection and
+coordination path in Rust and evaluate it against two policy-blind baselines and a centralised floor across
+a deterministic simulator, a \texttt{tc/netem}-shaped container testbed, and a
+[k3s / Raspberry~Pi] deployment including one trial over a real [mobile-data] link, with \NumReps{} independent
+repetitions per configuration. The policy-aware selector admitted [0] ineligible participants
+in [N] rounds, whereas the policy-blind baselines violated policy in [X\%] of rounds when a quarter of nodes were ineligible;
+compliance cost [\,\HTwoRatioEmu\ (95\% CI \HTwoRatioCIEmu)\,] in p99 round latency relative to resource-only selection.
+[Simulated and production results reproduced / did not reproduce within the pre-declared $\pm$20\% tolerance; \ldots]
+Hierarchical and secure aggregation are part of the reference architecture but are not evaluated here.

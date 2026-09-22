@@ -1,0 +1,17 @@
+% Table for Related Work (Exam Sec. 3.2: same rubric applied to every architecture, incl. ours and CRANE Cloud).
+% Entries are taken from how Section II of the paper already characterises each work. VERIFY each cell against the
+% paper before submission, and add \cite{} numbers using the CORRECTED numbering (see paper/EDIT_LIST.md).
+\begin{table*}[t]\centering\footnotesize
+\caption{Comparison of related architectures on a fixed rubric ($\checkmark$ addressed, -- not addressed, $\circ$ discussed but not an orchestration mechanism).}\label{tab:related}
+\begin{tabular}{lccccc}\toprule
+Work & Heterogeneity-aware selection/allocation & Hierarchical aggregation & Regulatory / residency in orchestration & Financial setting & Degraded-network evaluation\\\midrule
+Zhang \& Luo & $\checkmark$ & $\checkmark$ & -- & -- & [verify]\\
+Chen et al. (split FL) & $\checkmark$ & -- & -- & -- & [verify]\\
+Shang et al. & $\checkmark$ & $\checkmark$ & -- & -- & [verify]\\
+Tyagi et al. (OmniFed) & $\checkmark$ & [verify] & -- & -- & [verify]\\
+Marche (IoT orchestration review) & $\checkmark$ & -- & -- & -- & --\\
+Murri et al. & -- & -- & -- & $\checkmark$ & --\\
+Lambropoulos et al. & -- & -- & $\circ$ & $\checkmark$ & --\\
+CRANE Cloud (Bainomugisha \& Mwotil, 2021) & [verify] & -- & [verify: sovereignty-oriented] & -- & [verify: resilience-motivated]\\\midrule
+\textbf{This work (prototype)} & $\checkmark$ & -- (not evaluated) & $\checkmark$ & (synthetic) & $\checkmark$ (E2/E3, sim/emu/[prod])\\\bottomrule
+\end{tabular}\end{table*}

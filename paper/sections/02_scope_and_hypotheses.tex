@@ -1,0 +1,26 @@
+\subsection{Sovereignty Scope, Prototype Scope and Hypotheses}
+\label{sec:scope}
+\textbf{Sovereignty.} We use \emph{sovereignty} in three distinct senses and target one. Our
+\emph{primary} sense is \emph{legal and regulatory} sovereignty: data-residency and jurisdictional
+eligibility, evaluated with policy-aware instrumentation rather than asserted. Our \emph{secondary} sense is
+\emph{operational} sovereignty: continued operation under degraded, intermittent, low-bandwidth links, which
+characterise much of the Ugandan operating context. \emph{Technical} sovereignty (custody of compute and keys,
+independence from foreign providers) is out of scope and we make no claim about it. The regulatory setting is
+motivated by data-protection and residency obligations such as Uganda's Data Protection and Privacy Act, 2019
+[\textbf{cite; verify the section you rely on}], with supervised institutions of unequal infrastructure.
+
+\textbf{Prototype scope.} The evaluated prototype implements the participant-selection path of
+Section~\ref{sec:selection}: per-round policy check (native Rust and an OPA sidecar, cross-checked),
+min--max normalised composite scoring, greedy top-$k$ selection, deadline-bounded parallel training,
+sample-weighted FedAvg, and an availability feedback loop. It does \emph{not} solve Eq.~(1) exactly (selection is a
+greedy heuristic), and hierarchical aggregation, secure aggregation, differential privacy and trust scoring
+are architectural elements that are \emph{not} implemented or evaluated in this study.
+
+\textbf{Hypotheses} (fixed before the headline runs; repository tag \texttt{prereg-v1}).
+\begin{itemize}
+\item[\textbf{H1}] (compliance) The policy-aware selector admits zero ineligible participants in every condition; policy-blind baselines do violate when some nodes are ineligible.
+\item[\textbf{H2}] (cost of compliance) For ineligible fractions $f\le 0.25$, $p_{99}$ round latency of the policy-aware selector is at most $1.20\times$ that of resource-only selection.
+\item[\textbf{H2b}] (predicted break point) At $f=0.50$, where the eligible pool equals the round size and includes every capability class, the ratio exceeds $1.20$.
+\item[\textbf{H3}] (operational) Under packet loss of at least 5\%, resource-aware selection has lower $p_{99}$ latency than random selection.
+\end{itemize}
+Verdicts follow mechanical rules on 95\% confidence intervals (supported, falsified, or inconclusive) and every tested configuration is reported.

@@ -1,0 +1,54 @@
+\section{Experimental Methodology}
+\label{sec:method}
+\subsection{Workload and Testbed}
+The federated workload is logistic regression on a seeded, synthetic, class-imbalanced transaction dataset,
+non-IID across institutions (each with its own fraud prevalence). It is deliberately simple: its purpose is to
+generate \emph{real} local computation and a \emph{real} update payload ($4\,097$ single-precision weights) so that
+CPU throttling and network shaping affect the measurements; it supports no claim about accuracy on real financial data.
+Eight logical nodes belong to four classes (cloud, edge-large, edge-small, edge-tiny) differing in CPU quota
+(cgroup), link delay and link rate (Table~\ref{tab:topology}). Nodes \emph{measure} their own throughput at start-up
+and report jurisdiction, residency zone and licence status; the scheduler probes every node every round.
+
+\begin{table}[t]\centering\footnotesize
+\caption{Node classes used in every tier (single source of truth: \texttt{config/topology.json}).}\label{tab:topology}
+\begin{tabular}{lrrrr}\toprule Class & Nodes & CPU quota & Link delay (ms) & Link rate (Mbit/s)\\\midrule
+cloud & 2 & 2.0 & 5 & 100\\ edge-large & 2 & 1.0 & 20 & 50\\ edge-small & 2 & 0.5 & 40 & 20\\ edge-tiny & 2 & 0.25 & 80 & 5\\\bottomrule\end{tabular}
+\end{table}
+
+\subsection{Systems Compared}
+\emph{Selection strategies} share one code path so that only the tested factor differs:
+\textsc{Random} (policy-blind client sampling, no probing), \textsc{Resource-only} (composite score, policy-blind)
+and \textsc{Policy+Resource} (ours). \emph{Architecture baselines} run the same workload on: a centralised
+single-node service (all data pooled; the naive floor), k3s on constrained nodes, an OpenStack private cloud, and
+the CRANE Cloud managed platform [\textbf{cite Bainomugisha \& Mwotil, 2021}]. [State which were completed and which
+were not, and why.]
+
+\subsection{Tiers, Factors and Statistics}
+\textbf{Tiers.} (i) \emph{Deterministic simulator} (\texttt{flsim}): a seeded discrete simulator that runs the \emph{same}
+selection code against a model of compute, link delay, bandwidth caps and loss recovery on a virtual clock (identical
+seed yields byte-identical output). It is a purpose-built simulator rather than \texttt{turmoil}/\texttt{madsim}. (ii)
+\emph{Emulation}: containers with \texttt{tc/netem} on egress of participants and coordinator (scheduler egress is left
+unshaped to keep the policy-engine calls clean). (iii) \emph{Production}: [k3s on N Raspberry~Pi boards] with one trial
+over [a real mobile-data link], whose latency/loss/throughput trace is logged.
+
+\textbf{Factors.} Ineligible fraction $f\in\{0,0.25,0.5\}$ (E1); packet loss $\{0,1,2,5,10\}\%$, added delay
+$\{0,100,300\}$~ms and bandwidth cap $\{\text{none},1000,256\}$~kbit/s, one factor at a time (E2); nodes down
+$\{0,2,4\}$ (E3, exploratory). Held fixed: $N{=}8$, $K{=}4$, minimum 3 participants, 5\,s deadline, model size, data, scoring weights, image digest.
+
+\textbf{Statistics.} Each configuration is run for \NumReps{} independent repetitions of 20 rounds (2 warm-up rounds
+discarded). Because rounds within a repetition share state, the unit of independence is the repetition: percentiles
+are pooled over rounds and given 95\% \emph{cluster-bootstrap} confidence intervals (2000 resamples of repetitions);
+latency ratios use a \emph{paired} cluster bootstrap (strategies are interleaved in each repetition with a common seed);
+means use $t$-intervals; effect sizes are Cohen's $d$ and Cliff's $\delta$. Latency is recorded with HdrHistogram in
+Rust and independently recomputed in Python from raw per-round data. All configurations are reported.
+
+\textbf{Compliance measurement.} A violation is a participant whose update was accepted although it is ineligible
+under (a) the experiment's ground-truth list and (b) an audit of the attestation returned with each update; for
+OPA-backed runs the scheduler additionally counts disagreements between its native policy and OPA's verdict.
+\textbf{Simulated-to-production rule.} A headline result \emph{reproduces} if it has the same direction and differs by at most 20\%
+from its simulated/emulated counterpart; otherwise the claim is scoped to simulation and the gap is characterised (Section~\ref{sec:limits}).
+
+\subsection{Reproducibility}
+The repository provides a pinned toolchain and base-image digests, a committed lockfile, raw data for every reported
+run, and \texttt{make reproduce-analysis}, which regenerates every table, figure and macro in this paper from the raw data.
+CI re-runs the simulator benchmark on every commit. [Repository URL and release tag.]

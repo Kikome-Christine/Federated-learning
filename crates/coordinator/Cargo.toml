@@ -1,0 +1,13 @@
+[package]
+name = "coordinator"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tonic.workspace = true
+prost.workspace = true
+serde_json.workspace = true
+hdrhistogram.workspace = true
+flproto = { path = "../flproto" }
+flcommon = { path = "../flcommon" }

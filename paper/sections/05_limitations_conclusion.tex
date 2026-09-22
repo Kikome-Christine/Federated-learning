@@ -1,0 +1,10 @@
+\section{Limitations and Threats to Validity}
+\label{sec:limits}
+\textbf{Data and model.} Synthetic data and a linear model: results concern orchestration overhead and compliance behaviour, not model accuracy on real financial data.
+\textbf{Simulator.} \texttt{flsim} models neither congestion control, HTTP/2 flow control nor scheduler jitter; it was not built on \texttt{turmoil}/\texttt{madsim}. Any simulated-to-production gap is reported, not adjusted away.
+\textbf{Emulation.} \texttt{tc/netem} shapes egress only, on a single host; thermal state and background load [named here] can affect timing. The ineligible-node pattern is fixed per condition; random assignment is examined only in the simulator.
+\textbf{Production.} The real-link trial is uncontrolled and cannot be replayed; its trace is provided instead. [Sample size, location, duration.]
+\textbf{Scope of claims.} Selection is a greedy heuristic, not an exact solution of Eq.~(1). Hierarchical aggregation, secure aggregation, differential privacy and trust scoring are not evaluated. Compliance is measured against a policy we authored; we make no claim about legal sufficiency.
+
+\section{Conclusion}
+[Three sentences: what was built; what the evidence supports (with intervals) and where it was falsified or inconclusive; what remains, namely the unevaluated architectural elements and turmoil/madsim-based validation.]

@@ -1,0 +1,17 @@
+% Put \input{sections/00_helpers} in your preamble. Needs: booktabs, graphicx, amsmath, amssymb (\checkmark, \text).
+% Generated tables/figures are read from paper/generated/ (made by `make analysis`).
+% If a generated file does not exist yet the paper still compiles and shows a TODO box.
+\InputIfFileExists{generated/macros}{}{}
+\providecommand{\NumReps}{30}
+\providecommand{\HTwoRatioSim}{[TBD]}\providecommand{\HTwoRatioCISim}{[TBD]}
+\providecommand{\HTwoRatioEmu}{[TBD]}\providecommand{\HTwoRatioCIEmu}{[TBD]}
+\providecommand{\HTwoRatioProd}{[TBD]}\providecommand{\HTwoRatioCIProd}{[TBD]}
+\newcommand{\genTable}[3]{% file, caption, label
+  \IfFileExists{generated/#1.tex}{%
+    \begin{table*}[t]\centering\footnotesize\caption{#2}\label{#3}%
+    \resizebox{\textwidth}{!}{\input{generated/#1}}\end{table*}}{%
+    \par\noindent\fbox{\textbf{TODO} run \texttt{make analysis}: \texttt{\detokenize{#1}} not generated yet}\par}}
+\newcommand{\genFig}[3]{% file (no ext), caption, label
+  \IfFileExists{generated/#1.pdf}{%
+    \begin{figure}[t]\centering\includegraphics[width=\columnwidth]{generated/#1.pdf}\caption{#2}\label{#3}\end{figure}}{%
+    \par\noindent\fbox{\textbf{TODO} run \texttt{make analysis}: \texttt{\detokenize{#1}} not generated yet}\par}}

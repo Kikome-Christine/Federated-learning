@@ -1,0 +1,10 @@
+target/
+.env
+*.log
+__pycache__/
+.pytest_cache/
+paper/*.aux
+paper/*.log
+paper/*.out
+# NOTE: Cargo.lock is deliberately NOT ignored. It must be committed (pinned deps).
+# NOTE: results/*/raw is deliberately NOT ignored. Raw data is part of the artifact.

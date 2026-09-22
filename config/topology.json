@@ -1,0 +1,46 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for docker-compose.yml, deploy/k3s/flreg.yaml and the flsim simulator. Edit here, then run `make gen`. sim_bench_mops and sim.* are CALIBRATION CONSTANTS: replace them with values measured on your hardware (participants print bench_mops at start-up) and record the change in the paper.",
+  "model": {
+    "dim": 4096,
+    "n_samples": 1000,
+    "local_epochs": 3,
+    "lr": 0.5,
+    "data_seed": 7,
+    "eval_seed": 424242,
+    "n_eval": 2000
+  },
+  "policy": {
+    "allowed_jurisdictions": ["UG"],
+    "allowed_zones": ["ug-central"]
+  },
+  "scheduler": {
+    "weights": {"compute": 0.35, "bandwidth": 0.25, "latency": 0.25, "availability": 0.15},
+    "probe_timeout_ms": 1500
+  },
+  "sim": {
+    "train_slowdown": 3.0,
+    "rto_min_ms": 200,
+    "jitter_ms": 0.3
+  },
+  "classes": {
+    "cloud":      {"tier": "cloud", "cpus": 2.0,  "mem_mb": 1024, "link_delay_ms": 5,  "link_rate_mbit": 100, "sim_bench_mops": 2500},
+    "edge_large": {"tier": "edge",  "cpus": 1.0,  "mem_mb": 512,  "link_delay_ms": 20, "link_rate_mbit": 50,  "sim_bench_mops": 2500},
+    "edge_small": {"tier": "edge",  "cpus": 0.5,  "mem_mb": 512,  "link_delay_ms": 40, "link_rate_mbit": 20,  "sim_bench_mops": 1250},
+    "edge_tiny":  {"tier": "edge",  "cpus": 0.25, "mem_mb": 512,  "link_delay_ms": 80, "link_rate_mbit": 5,   "sim_bench_mops": 625}
+  },
+  "nodes": [
+    {"id": "n1", "class": "cloud"},
+    {"id": "n2", "class": "cloud"},
+    {"id": "n3", "class": "edge_large"},
+    {"id": "n4", "class": "edge_large"},
+    {"id": "n5", "class": "edge_small"},
+    {"id": "n6", "class": "edge_small"},
+    {"id": "n7", "class": "edge_tiny"},
+    {"id": "n8", "class": "edge_tiny"}
+  ],
+  "ineligible_patterns": {
+    "f0.00": [],
+    "f0.25": ["n2", "n6"],
+    "f0.50": ["n2", "n4", "n6", "n8"]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "_comment": "Experiment matrix. Every condition listed here is run for every tier it names, and ALL of them are reported (no selective reporting). Freeze this file with the pre-registration tag before the headline run.",
+  "defaults": {
+    "reps": 30,
+    "rounds": 20,
+    "warmup_rounds": 2,
+    "k": 4,
+    "min_participants": 3,
+    "deadline_ms": 5000,
+    "base_seed": 1000,
+    "strategies": ["random", "resource_only", "policy_resource"]
+  },
+  "experiments": [
+    {
+      "id": "E1",
+      "title": "Selection strategy x ineligible fraction (no network impairment)",
+      "tiers": ["sim", "emu", "prod"],
+      "conditions": [
+        {"pattern": "f0.00"},
+        {"pattern": "f0.25"},
+        {"pattern": "f0.50"}
+      ]
+    },
+    {
+      "id": "E2",
+      "title": "Network degradation sweep (one factor at a time), pattern f0.25",
+      "tiers": ["sim", "emu"],
+      "conditions": [
+        {"pattern": "f0.25", "loss_pct": 1},
+        {"pattern": "f0.25", "loss_pct": 2},
+        {"pattern": "f0.25", "loss_pct": 5},
+        {"pattern": "f0.25", "loss_pct": 10},
+        {"pattern": "f0.25", "delay_ms": 100},
+        {"pattern": "f0.25", "delay_ms": 300},
+        {"pattern": "f0.25", "rate_kbps": 1000},
+        {"pattern": "f0.25", "rate_kbps": 256}
+      ]
+    },
+    {
+      "id": "E3",
+      "title": "Node failure: compliance vs availability (exploratory), pattern f0.25",
+      "tiers": ["sim", "emu"],
+      "conditions": [
+        {"pattern": "f0.25", "down": ["n1", "n3"]},
+        {"pattern": "f0.25", "down": ["n1", "n3", "n4", "n5"]}
+      ]
+    }
+  ],
+  "centralized_baseline": {
+    "_comment": "Naive floor baseline (mandatory). Same data, one process, no distribution.",
+    "pattern": "f0.25"
+  }
+}

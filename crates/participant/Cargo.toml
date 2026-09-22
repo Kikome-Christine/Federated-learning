@@ -1,0 +1,11 @@
+[package]
+name = "participant"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tonic.workspace = true
+prost.workspace = true
+flproto = { path = "../flproto" }
+flcommon = { path = "../flcommon" }

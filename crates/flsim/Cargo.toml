@@ -1,0 +1,9 @@
+[package]
+name = "flsim"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+hdrhistogram.workspace = true
+flcommon = { path = "../flcommon" }

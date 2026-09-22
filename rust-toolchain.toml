@@ -1,0 +1,6 @@
+# Pinned toolchain (Objective 3: one-command rebuild, pinned environment).
+# If a fresh `cargo generate-lockfile` complains about MSRV, bump this AND
+# the RUST_IMAGE default in docker/Dockerfile together, then re-run `make pin`.
+[toolchain]
+channel = "1.90.0"
+profile = "minimal"

@@ -1,0 +1,8 @@
+[package]
+name = "flcommon"
+version.workspace = true
+edition.workspace = true
+
+# Deliberately dependency-free: the decision logic shared by the real system
+# and the deterministic simulator must be small, auditable and reproducible.
+[dependencies]

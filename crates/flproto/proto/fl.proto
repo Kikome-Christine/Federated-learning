@@ -1,0 +1,78 @@
+syntax = "proto3";
+package fl;
+
+message Empty {}
+
+// Self-description of a participant node. `bench_mops` is MEASURED at start-up
+// (so cgroup CPU throttling is reflected); the other fields are declared.
+message Profile {
+  string id = 1;
+  string tier = 2;             // "cloud" | "edge"
+  string jurisdiction = 3;     // e.g. "UG"
+  string license_status = 4;   // "active" | "revoked"
+  string residency_zone = 5;   // e.g. "ug-central"
+  uint32 cpu_cores = 6;        // declared (informational)
+  uint32 memory_mb = 7;        // declared
+  uint32 bandwidth_mbps = 8;   // declared uplink
+  double bench_mops = 9;       // measured million float-ops / second
+}
+
+service Participant {
+  rpc GetProfile(Empty) returns (Profile);
+  rpc Train(TrainRequest) returns (TrainResponse);
+}
+
+message TrainRequest {
+  string run_id = 1;
+  uint32 round = 2;
+  uint32 local_epochs = 3;
+  float learning_rate = 4;
+  repeated float global_weights = 5;   // dim + 1 (last = bias)
+}
+
+message TrainResponse {
+  string participant_id = 1;
+  repeated float weights = 2;
+  uint64 num_samples = 3;
+  float local_loss = 4;
+  uint64 train_us = 5;
+  Profile attestation = 6;   // profile at the moment of training, for post-hoc audit
+}
+
+service Scheduler {
+  rpc Select(SelectRequest) returns (SelectResponse);
+  rpc ReportOutcome(OutcomeReport) returns (Empty);
+}
+
+message SelectRequest {
+  string run_id = 1;
+  uint32 round = 2;
+  uint32 k = 3;
+  string strategy = 4;   // "random" | "resource_only" | "policy_resource"
+  uint64 seed = 5;
+}
+
+message Candidate {
+  string id = 1;
+  string endpoint = 2;
+  Profile profile = 3;   // may be absent if the node was unreachable (random strategy only)
+  double rtt_ms = 4;
+  double score = 5;
+}
+
+message Exclusion {
+  string id = 1;
+  string reason = 2;
+}
+
+message SelectResponse {
+  repeated Candidate selected = 1;
+  repeated Exclusion excluded = 2;
+  uint32 policy_disagreements = 3;   // native-vs-OPA verdict mismatches this call
+}
+
+message OutcomeReport {
+  string run_id = 1;
+  string participant_id = 2;
+  bool ok = 3;
+}

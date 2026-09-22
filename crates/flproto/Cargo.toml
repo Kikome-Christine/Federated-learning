@@ -1,0 +1,13 @@
+[package]
+name = "flproto"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tonic.workspace = true
+prost.workspace = true
+
+[build-dependencies]
+tonic-build = "0.12"
+# Vendored protoc: hermetic builds, no `apt install protobuf-compiler` needed.
+protoc-bin-vendored = "3"
