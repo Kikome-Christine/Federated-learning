@@ -6,14 +6,7 @@
 //!     NORMALISED capability, bandwidth, latency and availability.
 //!  3. The top-k are selected; ties broken by id (deterministic).
 //!
-//! Two baselines share this code path so that the ONLY difference between
-//! strategies is the thing under test:
-//!  * `resource_only` : same scoring, but ignores the policy verdict.
-//!  * `random`        : uniform random k of ALL configured nodes (FedAvg-style
-//!                      client sampling; does not even probe health).
-//!
-//! NOTE for the paper: this is a greedy top-k heuristic on a composite score,
-//! not an exact solver of Eq. (1). Say so explicitly.
+
 
 use crate::rng::SplitMix64;
 

@@ -7,12 +7,7 @@
 //! tier-agnostic and simulated-vs-emulated-vs-production comparison is a
 //! join on `cond_id`.
 //!
-//! Scope statement (put this in the paper): flsim is a purpose-built seeded
-//! discrete simulator, not turmoil/madsim. It models per-node compute, link
-//! delay, bandwidth caps and TCP-like loss recovery (RTO per loss event
-//! round). It does not model congestion control, HTTP/2 flow control or
-//! scheduler jitter -- exactly the effects the production tier can expose.
-//! It does not train a model, so `global_loss` is null in the sim tier.
+
 
 use std::{
     collections::HashMap,

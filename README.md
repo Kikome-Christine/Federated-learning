@@ -43,12 +43,7 @@ make pin                       # pin base images by digest (needs Docker) -> COM
 
 **Hardware:** simulator: any laptop (minutes). Emulation: >= 4 cores, 8 GB RAM, Linux with `tc`; expect ~2-4 h for E1+E2+E3 at 30x20 (reduce `rounds` in `config/experiments.json` on weak hardware and disclose). Production: 3-8 Pi 4/5 or Jetson boards.
 
-## Known deviations (disclose in the paper)
+## Known deviations 
 `flsim` is a purpose-built simulator (not turmoil/madsim); emulation shapes egress only; hierarchical/secure aggregation not implemented; synthetic data.
 
-## Submission checklist (Exam)
-- [ ] pre-registration committed + tag `prereg-v1` BEFORE headline runs  - [ ] `Cargo.lock` + `docker/digests.env` committed
-- [ ] raw data in `results/*/raw` committed  - [ ] `make reproduce-analysis` works from a clean clone
-- [ ] real-link trial + trace CSV  - [ ] sim-vs-prod table + discrepancy explanation  - [ ] all four baselines run or written justification approved
-- [ ] manuscript claims match the tagged release  - [ ] target venue named  - [ ] Google Form submitted  - [ ] demo rehearsed
-"# Federated-learning" 
+

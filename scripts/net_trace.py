@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Log a REAL network trace (RTT + loss over time) during a production trial.
 
-Section 5.3 of the exam requires the real trace to be logged alongside results,
-because the physical conditions cannot be replayed. Run this on the node/link
-under test for the whole duration of the trial:
+
 
     python3 scripts/net_trace.py --target 8.8.8.8 --out results/prod/trace_trial1.csv
     # optional bandwidth samples every 60 s (needs `iperf3 -s` on --iperf-host):

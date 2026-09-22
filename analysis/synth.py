@@ -1,6 +1,5 @@
 """SYNTHETIC data generator -- used ONLY by `analyze.py --self-test` and the tests
-to exercise the pipeline. Everything it writes is labelled SYNTHETIC and must
-never be mixed with real results or quoted in the paper."""
+to exercise the pipeline."""
 import json, pathlib
 import numpy as np
 

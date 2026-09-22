@@ -2,9 +2,7 @@
 //! imbalanced "fraud" dataset, non-IID across institutions (each institution
 //! has its own fraud prevalence). Pure Rust, no ML crates, fully deterministic.
 //!
-//! Purpose: give participants a REAL compute + REAL update payload so that CPU
-//! throttling and network shaping actually move the measurements. This is NOT
-//! a claim about real financial-model accuracy (see paper, Limitations).
+
 
 use crate::rng::{derive_seed, SplitMix64};
 

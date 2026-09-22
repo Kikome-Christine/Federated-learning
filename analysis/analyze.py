@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
-"""Regenerate every number, table and figure in the manuscript from raw JSONL.
 
-    python3 analysis/analyze.py --results results --topology config/topology.json \
-            --out results/tables --paper-out paper/generated
-    python3 analysis/analyze.py --self-test        # pipeline check on SYNTHETIC data
 
-Reads results/<tier>/raw/*.jsonl (tier = sim | emu | prod), one JSON object per
-round (schema: crates/coordinator/src/main.rs). Nothing is filtered except the
-declared warm-up rounds; duplicate rows are reported, never silently dropped.
-"""
 from __future__ import annotations
 
 import argparse, json, math, pathlib, sys, tempfile
