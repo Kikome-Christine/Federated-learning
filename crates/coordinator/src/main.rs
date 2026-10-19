@@ -27,7 +27,7 @@ use hdrhistogram::Histogram;
 use prost::Message;
 use serde_json::{json, Value};
 use tokio::task::JoinSet;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
 type BoxErr = Box<dyn std::error::Error>;
 
@@ -132,14 +132,37 @@ fn client_for(
     if let Some(c) = cache.get(endpoint) {
         return Ok(c.clone());
     }
-    let ch = Endpoint::from_shared(format!("http://{endpoint}"))
+    // `endpoint` comes straight from the scheduler's SelectResponse, which now
+    // carries a full URL (https://... for CRANE, http://host:port in-cluster).
+    let url = if endpoint.contains("://") { endpoint.to_string() } else { format!("http://{endpoint}") };
+    let mut ep = Endpoint::from_shared(url.clone())
         .map_err(|e| format!("bad endpoint {endpoint}: {e}"))?
-        .connect_timeout(Duration::from_millis(1000))
-        .connect_lazy();
+        .connect_timeout(Duration::from_millis(1000));
+    if url.starts_with("https://") {
+        ep = ep
+            .tls_config(ClientTlsConfig::new().with_enabled_roots())
+            .map_err(|e| format!("tls config for {endpoint}: {e}"))?;
+    }
+    let ch = ep.connect_lazy();
     let c = ParticipantClient::new(ch);
     cache.insert(endpoint.to_string(), c.clone());
     Ok(c)
 }
+// fn client_for(
+//     cache: &mut HashMap<String, ParticipantClient<Channel>>,
+//     endpoint: &str,
+// ) -> Result<ParticipantClient<Channel>, String> {
+//     if let Some(c) = cache.get(endpoint) {
+//         return Ok(c.clone());
+//     }
+//     let ch = Endpoint::from_shared(format!("http://{endpoint}"))
+//         .map_err(|e| format!("bad endpoint {endpoint}: {e}"))?
+//         .connect_timeout(Duration::from_millis(1000))
+//         .connect_lazy();
+//     let c = ParticipantClient::new(ch);
+//     cache.insert(endpoint.to_string(), c.clone());
+//     Ok(c)
+// }
 
 fn write_line(out: &mut File, rec: Value) -> Result<(), BoxErr> {
     writeln!(out, "{}", rec)?;
@@ -432,7 +455,13 @@ async fn main() -> Result<(), BoxErr> {
         return run_centralized(&cfg, &eval, &mut out);
     }
 
-    let sched_ch = Endpoint::from_shared(cfg.scheduler_url.clone())?.connect_timeout(Duration::from_secs(2)).connect_lazy();
+    let mut sched_ep = Endpoint::from_shared(cfg.scheduler_url.clone())?.connect_timeout(Duration::from_secs(2));
+    if cfg.scheduler_url.starts_with("https://") {
+        sched_ep = sched_ep.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
+
+    }
+    let sched_ch = sched_ep.connect_lazy();
+    // let sched_ch = Endpoint::from_shared(cfg.scheduler_url.clone())?.connect_timeout(Duration::from_secs(2)).connect_lazy();
     let mut sched = SchedulerClient::new(sched_ch);
     wait_for_scheduler(&cfg, &mut sched).await;
 

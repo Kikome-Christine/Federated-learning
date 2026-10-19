@@ -1,0 +1,7 @@
+tier,hyp,scope,statement,result,verdict
+prod,H1,all conditions,policy_resource admits 0 ineligible participants,"0 violations (ground truth), 0 (attestation audit) over 540 rounds",supported
+prod,H1-check,resource_only,policy-blind baseline DOES violate when f>0,0 violations,CHECK DESIGN
+prod,H1-check,random,policy-blind baseline DOES violate when f>0,0 violations,CHECK DESIGN
+sim,H1,all conditions,policy_resource admits 0 ineligible participants,"0 violations (ground truth), 0 (attestation audit) over 540 rounds",supported
+sim,H1-check,resource_only,policy-blind baseline DOES violate when f>0,0 violations,CHECK DESIGN
+sim,H1-check,random,policy-blind baseline DOES violate when f>0,0 violations,CHECK DESIGN

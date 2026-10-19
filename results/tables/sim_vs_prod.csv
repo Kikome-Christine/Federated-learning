@@ -1,0 +1,4 @@
+cond_a,cond_b,metric,value_a,value_b,rel_diff,same_direction,reproduces
+prod:default,sim:default,p99_policy,51.164332070000015,135.86305284126115,1.655425124193576,True,False
+prod:default,sim:default,p99_ratio_vs_random,1.0199837268318253,0.5885751635978209,-0.42295631967973046,False,False
+prod:default,sim:default,p99_ratio_vs_resource_only,0.8914928010214153,0.9987510750337015,0.12031311289266343,True,True

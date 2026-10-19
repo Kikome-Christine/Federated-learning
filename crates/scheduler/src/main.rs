@@ -19,7 +19,7 @@ use flproto::fl::participant_client::ParticipantClient;
 use flproto::fl::scheduler_server::{Scheduler, SchedulerServer};
 use flproto::fl::{Candidate, Empty, Exclusion, OutcomeReport, Profile, SelectRequest, SelectResponse};
 use tokio::task::JoinSet;
-use tonic::transport::{Channel, Endpoint, Server};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Server};
 use tonic::{Request, Response, Status};
 
 struct NodeCfg {
@@ -175,6 +175,7 @@ impl Scheduler for SchedulerSvc {
             }
         }
 
+
         let mut rng = SplitMix64::new(derive_seed(r.seed, &format!("{}#{}", r.run_id, r.round)));
         let sel = select_nodes(&views, &verdicts, r.k as usize, strategy, &self.weights, &mut rng);
 
@@ -244,12 +245,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut nodes = Vec::new();
     for item in spec.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        let (id, endpoint) = item.split_once('=').expect("PARTICIPANTS entries must look like id=host:port");
-        let channel = Endpoint::from_shared(format!("http://{endpoint}"))?
-            .connect_timeout(Duration::from_millis(1000))
-            .connect_lazy();
-        nodes.push(NodeCfg { id: id.to_string(), endpoint: endpoint.to_string(), channel });
+        let (id, raw) = item
+            .split_once('=')
+            .expect("PARTICIPANTS entries must look like id=host:port or id=https://host");
+        // A full URL (e.g. a CRANE https:// domain) is used as-is; a bare host:port is
+        // assumed to be plaintext in-cluster traffic (compose/k3s), as before.
+        let url = if raw.contains("://") { raw.to_string() } else { format!("http://{raw}") };
+        let mut ep = Endpoint::from_shared(url.clone())?.connect_timeout(Duration::from_millis(1000));
+        if url.starts_with("https://") {
+            ep = ep.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
+
+        }
+        let channel = ep.connect_lazy();
+        nodes.push(NodeCfg { id: id.to_string(), endpoint: url, channel });
     }
+
+    // let mut nodes = Vec::new();
+    // for item in spec.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    //     let (id, endpoint) = item.split_once('=').expect("PARTICIPANTS entries must look like id=host:port");
+    //     let channel = Endpoint::from_shared(format!("http://{endpoint}"))?
+    //         .connect_timeout(Duration::from_millis(1000))
+    //         .connect_lazy();
+    //     nodes.push(NodeCfg { id: id.to_string(), endpoint: endpoint.to_string(), channel });
+    // }
 
     let policy = Policy {
         allowed_jurisdictions: csv("ALLOWED_JURISDICTIONS", "UG"),

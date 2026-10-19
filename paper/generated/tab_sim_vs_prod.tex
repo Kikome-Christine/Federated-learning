@@ -1,0 +1,9 @@
+\begin{tabular}{lllrrrl}
+\toprule
+Condition A & Condition B & Metric & A & B & Rel. diff & Reproduces ($\pm$20\%) \\
+\midrule
+prod: - & sim: - & p99\_policy & 51.16 & 135.86 & +165.5\% & \textbf{no} \\
+prod: - & sim: - & p99 ratio vs random & 1.02 & 0.59 & -42.3\% & \textbf{no} \\
+prod: - & sim: - & p99 ratio vs resource\_only & 0.89 & 1.00 & +12.0\% & yes \\
+\bottomrule
+\end{tabular}

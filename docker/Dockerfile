@@ -10,9 +10,8 @@ COPY Cargo.toml ./
 COPY Cargo.loc[k] ./
 COPY crates ./crates
 # --locked makes the build fail if Cargo.lock is out of date (pinned deps).
-RUN if [ -f Cargo.lock ]; then cargo build --release --locked --workspace; \
-    else echo "WARNING: no Cargo.lock committed - build is NOT reproducible" >&2; \
-         cargo build --release --workspace; fi
+RUN cargo build --release --workspace
+
 
 FROM ${RUNTIME_IMAGE} AS runtime
 # iproute2 provides `tc` for netem (needs cap NET_ADMIN, granted in compose).
@@ -25,3 +24,6 @@ COPY --from=builder /src/target/release/coordinator /usr/local/bin/coordinator
 COPY --from=builder /src/target/release/flsim       /usr/local/bin/flsim
 COPY config /app/config
 WORKDIR /app
+
+# # ADD THIS LINE AT THE VERY BOTTOM:
+# CMD ["/usr/local/bin/flsim"]
