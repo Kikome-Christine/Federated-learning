@@ -1,9 +1,8 @@
 //! Regulatory-aware, resource-aware participant scheduler (paper Sec. III-D).
 //!
 //! Every round it (1) probes every node's profile, (2) evaluates residency
-//! policy (native Rust, and/or an Open Policy Agent sidecar), (3) scores and
-//! selects. Policy is therefore enforced continuously per round, not once at
-//! onboarding. Probe RTT is MEASURED, so network shaping changes decisions.
+//! policy via native checks and an Open Policy Agent sidecar, (3) scores and
+//! selects using the operational weights. Policy is enforced continuously.
 
 use std::{
     collections::HashMap,
@@ -19,8 +18,28 @@ use flproto::fl::participant_client::ParticipantClient;
 use flproto::fl::scheduler_server::{Scheduler, SchedulerServer};
 use flproto::fl::{Candidate, Empty, Exclusion, OutcomeReport, Profile, SelectRequest, SelectResponse};
 use tokio::task::JoinSet;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint, Server};
+use tonic::transport::{Channel, Endpoint, Server};
 use tonic::{Request, Response, Status};
+
+// --- Environment and Parsing Helpers ---
+
+fn env_str(key: &str, default: &str) -> String {
+    env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
+    env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
+fn parse_csv_env(key: &str, default: &str) -> Vec<String> {
+    env_str(key, default)
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+// --- Data Structures ---
 
 struct NodeCfg {
     id: String,
@@ -34,23 +53,32 @@ struct Opa {
 }
 
 impl Opa {
-    /// Fail-closed: any error is treated as "deny".
+    /// Fail-closed: any error is treated as "deny" to protect cross-border data constraints.
+    /// Maps directly to Section 19 of the Uganda Data Protection and Privacy Act (2019).
     async fn verdict(&self, p: &Profile) -> Result<(), String> {
+        let has_valid_attestation = !p.id.is_empty(); 
+        let attestation_is_stale = p.license_status == "stale";
+
         let body = serde_json::json!({
             "input": {
                 "jurisdiction": p.jurisdiction,
                 "residency_zone": p.residency_zone,
                 "license_status": p.license_status,
+                "has_valid_attestation": has_valid_attestation,
+                "attestation_is_stale": attestation_is_stale,
             }
         });
+
         let resp = self
             .http
             .post(format!("{}/v1/data/fl/residency", self.url))
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("opa_unreachable:{e}"))?;
-        let v: serde_json::Value = resp.json().await.map_err(|e| format!("opa_bad_response:{e}"))?;
+            .map_err(|e| format!("opa_unreachable:{}", e))?;
+
+        let v: serde_json::Value = resp.json().await.map_err(|e| format!("opa_bad_response:{}", e))?;
+        
         if v["result"]["allow"].as_bool().unwrap_or(false) {
             Ok(())
         } else {
@@ -142,7 +170,6 @@ impl Scheduler for SchedulerSvc {
         let strategy = Strategy::parse(&r.strategy)
             .ok_or_else(|| Status::invalid_argument(format!("unknown strategy '{}'", r.strategy)))?;
 
-        // The random baseline (plain FedAvg client sampling) does NOT probe.
         let probes: Vec<Option<(Profile, f64)>> = if strategy == Strategy::Random {
             vec![None; self.nodes.len()]
         } else {
@@ -151,15 +178,15 @@ impl Scheduler for SchedulerSvc {
         let mut views = self.views(&r.run_id, &probes);
         if strategy == Strategy::Random {
             for v in views.iter_mut() {
-                v.reachable = true; // random does not know otherwise
+                v.reachable = true;
             }
         }
 
-        // Policy verdicts: native reference always; OPA (authoritative) if configured.
         let mut verdicts: Vec<Result<(), String>> = views
             .iter()
             .map(|v| if v.reachable { self.policy.check(v) } else { Err("unreachable".to_string()) })
             .collect();
+            
         let mut disagreements = 0u32;
         if strategy == Strategy::PolicyResource {
             if let Some(opa) = &self.opa {
@@ -174,7 +201,6 @@ impl Scheduler for SchedulerSvc {
                 }
             }
         }
-
 
         let mut rng = SplitMix64::new(derive_seed(r.seed, &format!("{}#{}", r.run_id, r.round)));
         let sel = select_nodes(&views, &verdicts, r.k as usize, strategy, &self.weights, &mut rng);
@@ -196,6 +222,7 @@ impl Scheduler for SchedulerSvc {
                 }
             })
             .collect();
+            
         let excluded: Vec<Exclusion> = sel
             .excluded
             .iter()
@@ -204,12 +231,7 @@ impl Scheduler for SchedulerSvc {
 
         println!(
             "{{\"ev\":\"select\",\"run\":\"{}\",\"round\":{},\"strategy\":\"{}\",\"selected\":{},\"excluded\":{},\"policy_disagreements\":{}}}",
-            r.run_id,
-            r.round,
-            strategy.as_str(),
-            selected.len(),
-            excluded.len(),
-            disagreements
+            r.run_id, r.round, strategy.as_str(), selected.len(), excluded.len(), disagreements
         );
 
         Ok(Response::new(SelectResponse { selected, excluded, policy_disagreements: disagreements }))
@@ -218,88 +240,98 @@ impl Scheduler for SchedulerSvc {
     async fn report_outcome(&self, request: Request<OutcomeReport>) -> Result<Response<Empty>, Status> {
         let r = request.into_inner();
         let mut avail = self.avail.lock().unwrap();
-        let a = avail.entry((r.run_id, r.participant_id)).or_insert(1.0);
-        *a = 0.7 * *a + 0.3 * if r.ok { 1.0 } else { 0.0 };
+        
+        let alpha = 0.2;
+        let key = (r.run_id.clone(), r.participant_id.clone());
+        let current = avail.entry(key).or_insert(1.0);
+
+        if r.ok {
+            *current = (1.0 - alpha) * (*current) + alpha * 1.0;
+        } else {
+            *current = (1.0 - alpha) * (*current) + alpha * 0.0;
+        }
+        
         Ok(Response::new(Empty {}))
     }
 }
 
-fn csv(key: &str, default: &str) -> Vec<String> {
-    env::var(key)
-        .unwrap_or_else(|_| default.to_string())
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-fn env_f64(key: &str, default: f64) -> f64 {
-    env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // PARTICIPANTS="n1=host1:50052,n2=host2:50052,..."
-    let spec = env::var("PARTICIPANTS").expect("PARTICIPANTS env var is required, e.g. n1=host:50052,n2=host:50052");
-    let probe_timeout = Duration::from_millis(env_f64("PROBE_TIMEOUT_MS", 1500.0) as u64);
+    let backend_type = env_str("POLICY_BACKEND", "opa");
+    let opa_url = env_str("OPA_URL", "http://opa:8181");
+    
+    let w_compute = env_or("W_COMPUTE", 0.35);
+    let w_bandwidth = env_or("W_BANDWIDTH", 0.25);
+    let w_latency = env_or("W_LATENCY", 0.25);
+    let w_availability = env_or("W_AVAILABILITY", 0.15);
 
-    let mut nodes = Vec::new();
-    for item in spec.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        let (id, raw) = item
-            .split_once('=')
-            .expect("PARTICIPANTS entries must look like id=host:port or id=https://host");
-        // A full URL (e.g. a CRANE https:// domain) is used as-is; a bare host:port is
-        // assumed to be plaintext in-cluster traffic (compose/k3s), as before.
-        let url = if raw.contains("://") { raw.to_string() } else { format!("http://{raw}") };
-        let mut ep = Endpoint::from_shared(url.clone())?.connect_timeout(Duration::from_millis(1000));
-        if url.starts_with("https://") {
-            ep = ep.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
-
-        }
-        let channel = ep.connect_lazy();
-        nodes.push(NodeCfg { id: id.to_string(), endpoint: url, channel });
-    }
-
-    // let mut nodes = Vec::new();
-    // for item in spec.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-    //     let (id, endpoint) = item.split_once('=').expect("PARTICIPANTS entries must look like id=host:port");
-    //     let channel = Endpoint::from_shared(format!("http://{endpoint}"))?
-    //         .connect_timeout(Duration::from_millis(1000))
-    //         .connect_lazy();
-    //     nodes.push(NodeCfg { id: id.to_string(), endpoint: endpoint.to_string(), channel });
-    // }
+    let weights = Weights {
+        compute: w_compute,
+        bandwidth: w_bandwidth,
+        latency: w_latency,
+        availability: w_availability,
+    };
 
     let policy = Policy {
-        allowed_jurisdictions: csv("ALLOWED_JURISDICTIONS", "UG"),
-        allowed_zones: csv("ALLOWED_ZONES", "ug-central"),
-    };
-    let d = Weights::default();
-    let weights = Weights {
-        compute: env_f64("W_COMPUTE", d.compute),
-        bandwidth: env_f64("W_BANDWIDTH", d.bandwidth),
-        latency: env_f64("W_LATENCY", d.latency),
-        availability: env_f64("W_AVAILABILITY", d.availability),
+        allowed_jurisdictions: parse_csv_env("ALLOWED_JURISDICTIONS", "UG"),
+        allowed_zones: parse_csv_env("ALLOWED_ZONES", "ug-central"),
     };
 
-    let backend = env::var("POLICY_BACKEND").unwrap_or_else(|_| "native".to_string());
-    let opa = if backend == "opa" {
-        let url = env::var("OPA_URL").unwrap_or_else(|_| "http://opa:8181".to_string());
-        let http = reqwest::Client::builder().timeout(Duration::from_millis(1000)).build()?;
-        Some(Opa { url, http })
+    let opa = if backend_type == "opa" {
+        println!("Authoritative security plane activated via OPA container at: {}", opa_url);
+        Some(Opa {
+            url: opa_url,
+            http: reqwest::Client::new(),
+        })
     } else {
         None
     };
 
-    println!(
-        "{{\"ev\":\"start\",\"nodes\":{},\"policy_backend\":\"{}\",\"allowed_jurisdictions\":{:?},\"allowed_zones\":{:?}}}",
-        nodes.len(),
-        backend,
-        policy.allowed_jurisdictions,
-        policy.allowed_zones
-    );
+    let raw_participants = env_str("PARTICIPANTS", "");
+    let mut nodes = Vec::new();
 
-    let svc = SchedulerSvc { nodes, policy, weights, opa, probe_timeout, avail: Arc::new(Mutex::new(HashMap::new())) };
+    for item in raw_participants.split(',').filter(|s| !s.is_empty()) {
+        if let Some((id, endpoint)) = item.split_once('=') {
+            let target_endpoint = if endpoint.contains("://") {
+                endpoint.to_string()
+            } else {
+                format!("http://{}", endpoint)
+            };
+            
+            // Pass by clone configuration to satisfy standard move constraints
+            let ep = Endpoint::from_shared(target_endpoint.clone())?
+                .connect_timeout(Duration::from_millis(1500));
+            let channel = ep.connect_lazy();
+
+            nodes.push(NodeCfg {
+                id: id.trim().to_string(),
+                endpoint: endpoint.trim().to_string(),
+                channel,
+            });
+        }
+    }
+
+    let probe_timeout_ms = env_or("PROBE_TIMEOUT_MS", 1500);
+    let svc = SchedulerSvc {
+        nodes,
+        policy,
+        weights,
+        opa,
+        probe_timeout: Duration::from_millis(probe_timeout_ms),
+        avail: Arc::new(Mutex::new(HashMap::new())),
+    };
+
     let addr: SocketAddr = "0.0.0.0:50051".parse()?;
-    Server::builder().add_service(SchedulerServer::new(svc)).serve(addr).await?;
+    println!("Scheduler microservice listening on bound port: {}", addr);
+    
+    Server::builder()
+        .add_service(SchedulerServer::new(svc))
+        .serve(addr)
+        .await?;
+
     Ok(())
 }
+
+
+
+

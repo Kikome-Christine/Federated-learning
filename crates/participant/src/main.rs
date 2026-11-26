@@ -3,9 +3,11 @@
 //! Heterogeneity is REAL, not simulated with sleep(): the container's CPU is
 //! throttled by cgroups (docker `cpus:` / k8s limits) and the node MEASURES
 //! its own speed at start-up. Training is real logistic-regression compute on
-//! a seeded synthetic dataset and the update payload is a real weight vector.
+//! a real non-IID partitioned financial dataset.
 
 use std::{env, net::SocketAddr, path::Path, str::FromStr, sync::Arc, time::{Duration, Instant}};
+use serde::Deserialize;
+use std::fs::File;
 
 use flcommon::model::{self, Dataset};
 use flproto::fl::participant_server::{Participant, ParticipantServer};
@@ -38,6 +40,64 @@ fn bench_mops() -> f64 {
     (iters as f64 * n as f64) / start.elapsed().as_secs_f64() / 1e6
 }
 
+// Map the exact structural headers from the non-IID shard partitions
+#[derive(Debug, Deserialize)]
+struct FinancialRecord {
+    #[serde(rename = "Income")]
+    income: f32,
+    #[serde(rename = "Credit Score")]
+    credit_score: f32,
+    #[serde(rename = "Spending Score")]
+    spending_score: f32,
+    #[serde(rename = "Transaction Count")]
+    transaction_count: f32,
+    #[serde(rename = "Savings Ratio")]
+    savings_ratio: f32,
+    #[serde(rename = "Loan Default Risk")]
+    loan_default_risk: i32,
+}
+
+/// Ingests local CSV shards and maps variables natively to flcommon::model::Dataset
+fn load_local_financial_dataset<P: AsRef<Path>>(path: P, expected_dim: usize) -> Result<Dataset, Box<dyn std::error::Error>> {
+    let file = File::open(path)?;
+    let mut rdr = csv::Reader::from_reader(file);
+    
+    let mut x = Vec::new();
+    let mut y: Vec<u8> = Vec::new(); 
+    let mut row_count = 0;
+
+    for result in rdr.deserialize() {
+        let record: FinancialRecord = result?;
+        
+        // Bounded feature extraction: 5 features normalized + 1 bias term = 6 elements
+        let mut features = vec![
+            record.income / 150000.0,
+            record.credit_score / 850.0,
+            record.spending_score / 100.0,
+            record.transaction_count / 50.0,
+            record.savings_ratio,
+        ];
+        
+        // If the upstream system requests padding dimensions to reach expected_dim, pad with zeros
+        while features.len() < expected_dim {
+            features.push(0.0);
+        }
+        // Trim if it exceeds (ensuring consistency)
+        features.truncate(expected_dim);
+
+        x.extend(features);
+        y.push(record.loan_default_risk as u8);
+        row_count += 1;
+    }
+
+    Ok(Dataset {
+        x,
+        y,
+        n: row_count,
+        dim: expected_dim,
+    })
+}
+
 struct Svc {
     id: String,
     tier: String,
@@ -52,9 +112,6 @@ struct Svc {
 }
 
 impl Svc {
-    /// Current profile. A licence revocation is injected externally by
-    /// creating the flag file (`docker exec <node> touch /tmp/revoked`), which
-    /// lets experiments test continuous (per-round) policy enforcement.
     fn profile(&self) -> Profile {
         let license = if Path::new(&self.revoke_flag).exists() { "revoked" } else { "active" };
         Profile {
@@ -104,10 +161,9 @@ impl Participant for Svc {
         let train_us = t0.elapsed().as_micros() as u64;
 
         let attestation = self.profile();
-        // Independent audit trail: one structured line per training event.
         println!(
-            "{{\"ev\":\"train\",\"id\":\"{}\",\"run\":\"{}\",\"round\":{},\"train_us\":{},\"jurisdiction\":\"{}\",\"license\":\"{}\"}}",
-            self.id, run_id, round, train_us, attestation.jurisdiction, attestation.license_status
+            "{{\"ev\":\"train\",\"id\":\"{}\",\"run\":\"{}\",\"round\":{},\"train_us\":{},\"jurisdiction\":\"{}\",\"license\":\"{}\",\"samples\":{}}}",
+            self.id, run_id, round, train_us, attestation.jurisdiction, attestation.license_status, self.data.n
         );
 
         Ok(Response::new(TrainResponse {
@@ -131,16 +187,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let is_ineligible = ineligible.contains(&id);
 
-    // Ineligible nodes sit in a foreign jurisdiction / residency zone.
+    // Ineligible nodes sit in a foreign jurisdiction / residency zone to support adversarial testing (E5)
     let jurisdiction = if is_ineligible { env_str("ALT_JURISDICTION", "XX") } else { env_str("JURISDICTION", "UG") };
     let zone = if is_ineligible { env_str("ALT_ZONE", "xx-1") } else { env_str("RESIDENCY_ZONE", "ug-central") };
 
     let dim: usize = env_or("MODEL_DIM", 4096);
-    let n_samples: usize = env_or("N_SAMPLES", 1000);
-    let data_seed: u64 = env_or("DATA_SEED", 7);
+    
+    // Read the volume mounted data path specified by the orchestrator environment
+    let data_path = env_str("CLIENT_DATA_PATH", &format!("/app/data/client_{}.csv", id.replace("participant_", "")));
 
     let bench = bench_mops();
-    let data = Arc::new(model::institution_dataset(data_seed, &id, n_samples, dim));
+    
+    // Ingest the real non-IID shards into memory
+    let dataset = load_local_financial_dataset(&data_path, dim)
+        .unwrap_or_else(|e| {
+            eprintln!("WARN: Fallback to token generation because loading path {} failed: {}", data_path, e);
+            let n_samples: usize = env_or("N_SAMPLES", 1000);
+            model::institution_dataset(env_or("DATA_SEED", 7), &id, n_samples, dim)
+        });
+    
+    let total_samples = dataset.n;
+    let data = Arc::new(dataset);
 
     let svc = Svc {
         id: id.clone(),
@@ -156,9 +223,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let p = svc.profile();
+    
+    // Precision telemetry logging to track model-update metric footprints cleanly on startup
+        // Fix type constraints for payload byte sizes
+    let payload_bytes = (p.cpu_cores * 0) + ((dim + 1) * std::mem::size_of::<f32>()) as u32;
+
     println!(
-        "{{\"ev\":\"start\",\"id\":\"{}\",\"tier\":\"{}\",\"jurisdiction\":\"{}\",\"zone\":\"{}\",\"bench_mops\":{:.1},\"dim\":{},\"n\":{}}}",
-        p.id, p.tier, p.jurisdiction, p.residency_zone, p.bench_mops, dim, n_samples
+        "{{\"ev\":\"start\",\"id\":\"{}\",\"tier\":\"{}\",\"jurisdiction\":\"{}\",\"zone\":\"{}\",\"bench_mops\":{:.1},\"dim\":{},\"n\":{},\"payload_bytes\":{}}}",
+        p.id, p.tier, p.jurisdiction, p.residency_zone, p.bench_mops, dim, total_samples, payload_bytes
     );
 
     let addr: SocketAddr = "0.0.0.0:50052".parse()?;

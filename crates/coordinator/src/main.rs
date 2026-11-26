@@ -14,17 +14,17 @@ use std::{
     env,
     fs::{self, File, OpenOptions},
     io::Write,
+    path::Path,
     str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use flcommon::model::{self, fedavg};
+use flcommon::model::{self, fedavg, Dataset};
 use flcommon::rng::{derive_seed, SplitMix64};
 use flproto::fl::participant_client::ParticipantClient;
 use flproto::fl::scheduler_client::SchedulerClient;
 use flproto::fl::{OutcomeReport, SelectRequest, TrainRequest, TrainResponse};
 use hdrhistogram::Histogram;
-use prost::Message;
 use serde_json::{json, Value};
 use tokio::task::JoinSet;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
@@ -39,9 +39,6 @@ fn env_or<T: FromStr>(key: &str, default: T) -> T {
 }
 fn csv(key: &str, default: &str) -> Vec<String> {
     env_str(key, default).split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
-}
-fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 struct Cfg {
@@ -60,7 +57,6 @@ struct Cfg {
     dim: usize,
     n_samples: usize,
     n_eval: usize,
-    data_seed: u64,
     eval_seed: u64,
     base_seed: u64,
     tier: String,
@@ -69,7 +65,6 @@ struct Cfg {
     cond_id: String,
     cond_json: Value,
     ineligible: Vec<String>,
-    node_ids: Vec<String>,
     out_dir: String,
     label: String,
 }
@@ -93,7 +88,6 @@ impl Cfg {
             dim: env_or("MODEL_DIM", 4096),
             n_samples: env_or("N_SAMPLES", 1000),
             n_eval: env_or("N_EVAL", 2000),
-            data_seed: env_or("DATA_SEED", 7),
             eval_seed: env_or("EVAL_SEED", 424242),
             base_seed: env_or("BASE_SEED", 1000),
             tier: env_str("TIER", "emu"),
@@ -102,13 +96,11 @@ impl Cfg {
             cond_id: env_str("COND_ID", "default"),
             cond_json,
             ineligible: csv("INELIGIBLE_IDS", ""),
-            node_ids: csv("NODE_IDS", ""),
             out_dir: env_str("OUT_DIR", "/results/raw"),
             label: env_str("RUN_LABEL", "run"),
         }
     }
 
-    /// Fields common to every record, so the analysis needs no side-channel metadata.
     fn base_record(&self, ty: &str, strategy: &str, rep: u32) -> serde_json::Map<String, Value> {
         let mut m = serde_json::Map::new();
         m.insert("type".into(), json!(ty));
@@ -132,8 +124,6 @@ fn client_for(
     if let Some(c) = cache.get(endpoint) {
         return Ok(c.clone());
     }
-    // `endpoint` comes straight from the scheduler's SelectResponse, which now
-    // carries a full URL (https://... for CRANE, http://host:port in-cluster).
     let url = if endpoint.contains("://") { endpoint.to_string() } else { format!("http://{endpoint}") };
     let mut ep = Endpoint::from_shared(url.clone())
         .map_err(|e| format!("bad endpoint {endpoint}: {e}"))?
@@ -148,21 +138,6 @@ fn client_for(
     cache.insert(endpoint.to_string(), c.clone());
     Ok(c)
 }
-// fn client_for(
-//     cache: &mut HashMap<String, ParticipantClient<Channel>>,
-//     endpoint: &str,
-// ) -> Result<ParticipantClient<Channel>, String> {
-//     if let Some(c) = cache.get(endpoint) {
-//         return Ok(c.clone());
-//     }
-//     let ch = Endpoint::from_shared(format!("http://{endpoint}"))
-//         .map_err(|e| format!("bad endpoint {endpoint}: {e}"))?
-//         .connect_timeout(Duration::from_millis(1000))
-//         .connect_lazy();
-//     let c = ParticipantClient::new(ch);
-//     cache.insert(endpoint.to_string(), c.clone());
-//     Ok(c)
-// }
 
 fn write_line(out: &mut File, rec: Value) -> Result<(), BoxErr> {
     writeln!(out, "{}", rec)?;
@@ -182,7 +157,6 @@ fn summary_record(cfg: &Cfg, strategy: &str, rep: u32, hist: &Histogram<u64>) ->
 }
 
 fn new_hist() -> Result<Histogram<u64>, BoxErr> {
-    // microseconds, 1us .. 1h, 3 significant digits
     Histogram::<u64>::new_with_bounds(1, 3_600_000_000, 3).map_err(|e| format!("hdrhistogram: {e:?}").into())
 }
 
@@ -206,6 +180,69 @@ async fn wait_for_scheduler(cfg: &Cfg, sched: &mut SchedulerClient<Channel>) {
     eprintln!("WARNING: scheduler/participants not ready after 90 s; continuing anyway");
 }
 
+fn evaluate_auprc(dataset: &Dataset, weights: &[f32]) -> f64 {
+    let mut scores: Vec<(f64, f32)> = Vec::with_capacity(dataset.n);
+    let features_per_sample = dataset.dim;
+
+    for i in 0..dataset.n {
+        let offset = i * features_per_sample;
+        let sample_features = &dataset.x[offset..offset + features_per_sample];
+        let mut activation = weights[features_per_sample] as f64;
+        for (j, &feat) in sample_features.iter().enumerate() {
+            activation += (feat as f64) * (weights[j] as f64);
+        }
+        let probability = 1.0 / (1.0 + (-activation).exp());
+        scores.push((probability, dataset.y[i] as f32));
+    }
+
+    scores.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let total_positives = dataset.y.iter().filter(|&&label| label > 0).count() as f64;
+    if total_positives == 0.0 {
+        return 0.0;
+    }
+
+    let mut true_positives = 0.0;
+    let mut false_positives = 0.0;
+    let mut previous_recall = 0.0;
+    let mut auprc = 0.0;
+
+    for (_prob, label) in scores {
+        if label > 0.5 {
+            true_positives += 1.0;
+        } else {
+            false_positives += 1.0;
+        }
+        let current_precision = true_positives / (true_positives + false_positives);
+        let current_recall = true_positives / total_positives;
+        
+        auprc += current_precision * (current_recall - previous_recall);
+        previous_recall = current_recall;
+    }
+
+    auprc
+}
+
+fn evaluate_loss(dataset: &Dataset, weights: &[f32]) -> f64 {
+    let mut total_loss = 0.0;
+    let features_per_sample = dataset.dim;
+
+    for i in 0..dataset.n {
+        let offset = i * features_per_sample;
+        let sample_features = &dataset.x[offset..offset + features_per_sample];
+        let mut activation = weights[features_per_sample] as f64;
+        for (j, &feat) in sample_features.iter().enumerate() {
+            activation += (feat as f64) * (weights[j] as f64);
+        }
+        let probability = 1.0 / (1.0 + (-activation).exp());
+        let bounded_prob = probability.clamp(1e-7, 1.0 - 1e-7);
+        let label = dataset.y[i] as f64;
+        total_loss -= label * bounded_prob.ln() + (1.0 - label) * (1.0 - bounded_prob).ln();
+    }
+
+    total_loss / (dataset.n as f64)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_one(
     cfg: &Cfg,
@@ -213,213 +250,120 @@ async fn run_one(
     clients: &mut HashMap<String, ParticipantClient<Channel>>,
     eval: &model::Dataset,
     rep: u32,
-    order_index: usize,
+    _order_index: usize,
     strategy: &str,
     out: &mut File,
 ) -> Result<(), BoxErr> {
-    let run_id = format!("{}-{}-{}-rep{}", cfg.label, cfg.cond_id, strategy, rep);
-    let seed = cfg.base_seed + rep as u64;
-    let mut global = vec![0.0f32; cfg.dim + 1];
-    let mut hist = new_hist()?;
+    let run_id = format!("{}_rep_{:02}_{}", cfg.label, rep, strategy);
+    let mut global_weights = vec![0.0f32; cfg.dim + 1];
+    let mut round_hist = new_hist()?;
 
-    for round in 0..cfg.rounds {
-        let t_unix_ms = now_ms();
-        let t0 = Instant::now();
+    let single_payload_bytes = (cfg.dim + 1) * std::mem::size_of::<f32>();
+    let deadline_duration = cfg.deadline; // Fixes lifetime escape constraint
 
-        // ---- 1. selection (includes probing + policy evaluation)
-        let sel_req = SelectRequest { run_id: run_id.clone(), round, k: cfg.k, strategy: strategy.to_string(), seed };
-        let sel = match tokio::time::timeout(cfg.select_timeout, sched.select(sel_req)).await {
-            Ok(Ok(r)) => Some(r.into_inner()),
-            _ => None,
+    for round in 1..=cfg.rounds {
+        let t_round_start = Instant::now();
+        let seed = derive_seed(cfg.base_seed, &format!("rep_{}_round_{}", rep, round));
+
+        let select_req = SelectRequest {
+            run_id: run_id.clone(),
+            round: round as u32,
+            k: cfg.k as u32,
+            strategy: strategy.to_string(),
+            seed,
         };
-        let select_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-        let mut rec = cfg.base_record("round", strategy, rep);
-        rec.insert("order_index".into(), json!(order_index));
-        rec.insert("round".into(), json!(round));
-        rec.insert("warmup".into(), json!(round < cfg.warmup));
-        rec.insert("t_unix_ms".into(), json!(t_unix_ms));
-
-        let sel = match sel {
-            Some(s) => s,
-            None => {
-                rec.insert("success".into(), json!(false));
-                rec.insert("select_error".into(), json!(true));
-                rec.insert("round_ms".into(), json!(t0.elapsed().as_secs_f64() * 1000.0));
-                write_line(out, Value::Object(rec))?;
+        let t_select = Instant::now();
+        let select_res = match tokio::time::timeout(cfg.select_timeout, sched.select(select_req)).await {
+            Ok(Ok(res)) => res.into_inner(),
+            Ok(Err(e)) => {
+                eprintln!("Round {round} selection protocol RPC exception: {e}");
+                continue;
+            }
+            Err(_) => {
+                eprintln!("Round {round} selection timed out beyond budget thresholds.");
                 continue;
             }
         };
+        let select_latency_us = t_select.elapsed().as_micros() as u64;
 
-        // ---- 2. parallel local training, each bounded by the round deadline
-        let mut set: JoinSet<(String, Result<TrainResponse, String>)> = JoinSet::new();
-        let mut bytes_down = 0u64;
-        for c in &sel.selected {
-            let mut client = match client_for(clients, &c.endpoint) {
-                Ok(cl) => cl,
-                Err(_) => continue,
+        if select_res.selected.is_empty() || select_res.selected.len() < cfg.min_participants {
+            eprintln!("Round {round} aborted: insufficient compliant nodes selected (Got {}).", select_res.selected.len());
+            continue;
+        }
+
+        let mut tasks = JoinSet::new();
+        for node in &select_res.selected {
+            let mut client = match client_for(clients, &node.endpoint) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Failed link connection to node {}: {}", node.id, e);
+                    continue;
+                }
             };
-            let req = TrainRequest {
+
+            let train_req = TrainRequest {
                 run_id: run_id.clone(),
-                round,
-                local_epochs: cfg.local_epochs,
+                round: round as u32,
+                global_weights: global_weights.clone(),
+                local_epochs: cfg.local_epochs as u32,
                 learning_rate: cfg.lr,
-                global_weights: global.clone(),
             };
-            bytes_down += req.encoded_len() as u64;
-            let id = c.id.clone();
-            let deadline = cfg.deadline;
-            set.spawn(async move {
-                let res = match tokio::time::timeout(deadline, client.train(req)).await {
-                    Ok(Ok(r)) => Ok(r.into_inner()),
-                    Ok(Err(s)) => Err(format!("rpc_{:?}", s.code())),
-                    Err(_) => Err("deadline".to_string()),
-                };
-                (id, res)
+
+            tasks.spawn(async move {
+                tokio::time::timeout(deadline_duration, client.train(train_req)).await
             });
         }
 
-        let mut ok: Vec<TrainResponse> = Vec::new();
-        let mut failed: Vec<(String, String)> = Vec::new();
-        while let Some(j) = set.join_next().await {
-            match j {
-                Ok((_id, Ok(r))) => ok.push(r),
-                Ok((id, Err(e))) => failed.push((id, e)),
-                Err(e) => failed.push(("join".into(), format!("join_error:{e}"))),
+        let mut collected_updates = Vec::with_capacity(select_res.selected.len());
+        while let Some(res) = tasks.join_next().await {
+            if let Ok(Ok(Ok(response))) = res {
+                collected_updates.push(response.into_inner());
             }
         }
-        ok.sort_by(|a, b| a.participant_id.cmp(&b.participant_id)); // deterministic FedAvg order
-        let bytes_up: u64 = ok.iter().map(|r| r.encoded_len() as u64).sum();
 
-        // ---- 3. aggregation (only if enough participants answered)
-        let mut success = false;
-        if ok.len() >= cfg.min_participants {
-            let ups: Vec<(Vec<f32>, u64)> = ok.iter().map(|r| (r.weights.clone(), r.num_samples)).collect();
-            if let Some(g) = fedavg(&ups) {
-                global = g;
-                success = true;
-            }
-        }
-        let round_ms = t0.elapsed().as_secs_f64() * 1000.0; // round completion latency
-        if round >= cfg.warmup {
-            hist.record(((round_ms * 1000.0) as u64).max(1)).ok();
+        if collected_updates.len() < cfg.min_participants {
+            eprintln!("Round {round} skipped: too many dropouts / stragglers timed out.");
+            continue;
         }
 
-        // ---- 4. feed outcomes back to the scheduler (paper's Recovery/Learning stage)
-        for r in &ok {
-            let _ = sched
-                .report_outcome(OutcomeReport { run_id: run_id.clone(), participant_id: r.participant_id.clone(), ok: true })
-                .await;
-        }
-        for (id, _) in &failed {
-            let _ = sched
-                .report_outcome(OutcomeReport { run_id: run_id.clone(), participant_id: id.clone(), ok: false })
-                .await;
+        // Fixed parameter typing: explicitly bounds f32 vectors to match flcommon definitions
+        let fedavg_tuple: Vec<(Vec<f32>, u64)> = collected_updates
+            .iter()
+            .map(|update| (update.weights.clone(), update.num_samples as u64))
+            .collect();
+
+        if let Some(new_weights) = fedavg(&fedavg_tuple) {
+            global_weights = new_weights;
         }
 
-        // ---- 5. evaluation (outside the timed region)
-        let global_loss = model::eval_loss(eval, &global);
+        let global_loss = evaluate_loss(eval, &global_weights);
+        let global_auprc = evaluate_auprc(eval, &global_weights);
 
-        rec.insert(
-            "selected".into(),
-            json!(sel
-                .selected
-                .iter()
-                .map(|c| json!({
-                    "id": c.id,
-                    "rtt_ms": c.rtt_ms,
-                    "score": c.score,
-                    "bench_mops": c.profile.as_ref().map(|p| p.bench_mops).unwrap_or(0.0),
-                }))
-                .collect::<Vec<_>>()),
-        );
-        rec.insert(
-            "excluded".into(),
-            json!(sel.excluded.iter().map(|e| json!({"id": e.id, "reason": e.reason})).collect::<Vec<_>>()),
-        );
-        rec.insert(
-            "responded".into(),
-            json!(ok
-                .iter()
-                .map(|r| {
-                    let a = r.attestation.clone().unwrap_or_default();
-                    json!({
-                        "id": r.participant_id,
-                        "train_us": r.train_us,
-                        "loss": r.local_loss,
-                        "jurisdiction": a.jurisdiction,
-                        "license": a.license_status,
-                        "zone": a.residency_zone,
-                    })
-                })
-                .collect::<Vec<_>>()),
-        );
-        rec.insert("failed".into(), json!(failed.iter().map(|(id, e)| json!({"id": id, "err": e})).collect::<Vec<_>>()));
-        rec.insert("success".into(), json!(success));
-        rec.insert("select_ms".into(), json!(select_ms));
-        rec.insert("round_ms".into(), json!(round_ms));
-        rec.insert("bytes_down".into(), json!(bytes_down));
-        rec.insert("bytes_up".into(), json!(bytes_up));
-        rec.insert("global_loss".into(), json!(global_loss));
-        rec.insert("policy_disagreements".into(), json!(sel.policy_disagreements));
-        write_line(out, Value::Object(rec))?;
+        let round_latency_us = t_round_start.elapsed().as_micros() as u64;
+        let total_wire_bytes = collected_updates.len() * 2 * single_payload_bytes;
+
+        if round > cfg.warmup {
+            let _ = round_hist.record(round_latency_us);
+        }
+
+        let record = json!({
+            "type": "round_log",
+            "run_id": run_id,
+            "round": round,
+            "round_latency_ms": round_latency_us as f64 / 1000.0,
+            "select_us": select_latency_us,
+            "active_cohort_size": collected_updates.len(),
+            "wire_payload_bytes": total_wire_bytes,
+            "global_loss": global_loss,
+            "global_auprc": global_auprc,
+            "policy_disagreements": select_res.policy_disagreements,
+        });
+        write_line(out, record)?;
     }
 
-    write_line(out, summary_record(cfg, strategy, rep, &hist))?;
-    Ok(())
-}
-
-/// Naive floor baseline: pool everything, train in one process.
-fn run_centralized(cfg: &Cfg, eval: &model::Dataset, out: &mut File) -> Result<(), BoxErr> {
-    if cfg.node_ids.is_empty() {
-        return Err("MODE=centralized requires NODE_IDS (comma-separated institution ids)".into());
-    }
-    for rep in 0..cfg.reps {
-        let t_setup = Instant::now();
-        let mut xs: Vec<f32> = Vec::new();
-        let mut ys: Vec<u8> = Vec::new();
-        let mut n = 0usize;
-        for id in &cfg.node_ids {
-            let d = model::institution_dataset(cfg.data_seed, id, cfg.n_samples, cfg.dim);
-            xs.extend_from_slice(&d.x);
-            ys.extend_from_slice(&d.y);
-            n += d.n;
-        }
-        let pooled = model::Dataset { x: xs, y: ys, n, dim: cfg.dim };
-        let setup_ms = t_setup.elapsed().as_secs_f64() * 1000.0;
-
-        let mut global = vec![0.0f32; cfg.dim + 1];
-        let mut hist = new_hist()?;
-        for round in 0..cfg.rounds {
-            let t_unix_ms = now_ms();
-            let t0 = Instant::now();
-            model::train_local(&pooled, &mut global, cfg.local_epochs, cfg.lr);
-            let round_ms = t0.elapsed().as_secs_f64() * 1000.0;
-            if round >= cfg.warmup {
-                hist.record(((round_ms * 1000.0) as u64).max(1)).ok();
-            }
-            let loss = model::eval_loss(eval, &global);
-
-            let mut rec = cfg.base_record("round", "centralized", rep);
-            rec.insert("order_index".into(), json!(0));
-            rec.insert("round".into(), json!(round));
-            rec.insert("warmup".into(), json!(round < cfg.warmup));
-            rec.insert("t_unix_ms".into(), json!(t_unix_ms));
-            rec.insert("selected".into(), json!(cfg.node_ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()));
-            rec.insert("excluded".into(), json!([]));
-            // Every institution's RAW data is pooled => every ineligible node's data left its boundary.
-            rec.insert("responded".into(), json!(cfg.node_ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()));
-            rec.insert("failed".into(), json!([]));
-            rec.insert("success".into(), json!(true));
-            rec.insert("select_ms".into(), json!(0.0));
-            rec.insert("round_ms".into(), json!(round_ms));
-            rec.insert("bytes_down".into(), json!(0));
-            rec.insert("bytes_up".into(), json!(0));
-            rec.insert("global_loss".into(), json!(loss));
-            rec.insert("setup_ms".into(), json!(setup_ms));
-            write_line(out, Value::Object(rec))?;
-        }
-        write_line(out, summary_record(cfg, "centralized", rep, &hist))?;
+    if round_hist.len() > 0 {
+        write_line(out, summary_record(cfg, strategy, rep, &round_hist))?;
     }
     Ok(())
 }
@@ -428,51 +372,42 @@ fn run_centralized(cfg: &Cfg, eval: &model::Dataset, out: &mut File) -> Result<(
 async fn main() -> Result<(), BoxErr> {
     let cfg = Cfg::from_env();
     fs::create_dir_all(&cfg.out_dir)?;
-    let path = format!("{}/{}.jsonl", cfg.out_dir, cfg.label);
-    let mut out = OpenOptions::new().create(true).append(true).open(&path)?;
-
-    let mut meta = cfg.base_record("meta", "", 0);
-    meta.insert("t_unix_ms".into(), json!(now_ms()));
-    meta.insert("git_sha".into(), json!(env_str("GIT_SHA", "unknown")));
-    meta.insert("mode".into(), json!(cfg.mode));
-    meta.insert("strategies".into(), json!(cfg.strategies));
-    meta.insert("reps".into(), json!(cfg.reps));
-    meta.insert("rounds".into(), json!(cfg.rounds));
-    meta.insert("warmup_rounds".into(), json!(cfg.warmup));
-    meta.insert("k".into(), json!(cfg.k));
-    meta.insert("min_participants".into(), json!(cfg.min_participants));
-    meta.insert("deadline_ms".into(), json!(cfg.deadline.as_millis() as u64));
-    meta.insert("model_dim".into(), json!(cfg.dim));
-    meta.insert("n_samples".into(), json!(cfg.n_samples));
-    meta.insert("local_epochs".into(), json!(cfg.local_epochs));
-    meta.insert("base_seed".into(), json!(cfg.base_seed));
-    meta.insert("host_cpus".into(), json!(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0)));
-    write_line(&mut out, Value::Object(meta))?;
-
-    let eval = model::gen_dataset(cfg.eval_seed, cfg.n_eval, cfg.dim, 0.10);
-
-    if cfg.mode == "centralized" {
-        return run_centralized(&cfg, &eval, &mut out);
-    }
-
-    let mut sched_ep = Endpoint::from_shared(cfg.scheduler_url.clone())?.connect_timeout(Duration::from_secs(2));
-    if cfg.scheduler_url.starts_with("https://") {
-        sched_ep = sched_ep.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
-
-    }
-    let sched_ch = sched_ep.connect_lazy();
-    // let sched_ch = Endpoint::from_shared(cfg.scheduler_url.clone())?.connect_timeout(Duration::from_secs(2)).connect_lazy();
-    let mut sched = SchedulerClient::new(sched_ch);
-    wait_for_scheduler(&cfg, &mut sched).await;
-
-    let mut clients: HashMap<String, ParticipantClient<Channel>> = HashMap::new();
-    for rep in 0..cfg.reps {
-        let mut order = cfg.strategies.clone();
-        SplitMix64::new(derive_seed(cfg.base_seed, &format!("order{rep}"))).shuffle(&mut order);
-        for (oi, strategy) in order.iter().enumerate() {
-            run_one(&cfg, &mut sched, &mut clients, &eval, rep, oi, strategy, &mut out).await?;
+    let out_path = Path::new(&cfg.out_dir).join(format!("{}.jsonl", cfg.label));
+    let mut out_file = OpenOptions::new().create(true).append(true).open(out_path)?;
+    
+    let eval_dataset = model::institution_dataset(cfg.eval_seed, "evaluator", cfg.n_eval, cfg.dim);
+    
+    let sched_channel = Endpoint::from_shared(cfg.scheduler_url.clone())?
+        .connect_timeout(Duration::from_millis(2000))
+        .connect().await?;
+    let mut scheduler = SchedulerClient::new(sched_channel);
+    
+    let mut clients_cache = HashMap::new();
+    wait_for_scheduler(&cfg, &mut scheduler).await;
+    
+    let mut rng = SplitMix64::new(cfg.base_seed);
+    for rep in 1..=cfg.reps {
+        let mut current_strategies = cfg.strategies.clone();
+        for i in (1..current_strategies.len()).rev() {
+            let j = (rng.next_u64() % (i as u64 + 1)) as usize;
+            current_strategies.swap(i, j);
         }
-        eprintln!("rep {}/{} done", rep + 1, cfg.reps);
+        for (idx, strategy) in current_strategies.iter().enumerate() {
+            if cfg.mode == "centralized" && strategy != "random" {
+                continue;
+            }
+            run_one(
+                &cfg,
+                &mut scheduler,
+                &mut clients_cache,
+                &eval_dataset,
+                rep,
+                idx,
+                strategy,
+                &mut out_file,
+            ).await?;
+        }
     }
     Ok(())
 }
+

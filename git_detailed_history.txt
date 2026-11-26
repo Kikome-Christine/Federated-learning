@@ -1,0 +1,147 @@
+commit d02868a4771b0cfe36a46c07704f6d915ccbd680
+Author: kikome christine <kikomechristine2022@gmail.com>
+Date:   Mon Oct 19 04:49:31 2026 +0300
+
+    record the results
+
+ Cargo.toml                              |    2 +-
+ crates/coordinator/src/main.rs          |   39 +-
+ crates/scheduler/src/main.rs            |   30 +-
+ docker/Dockerfile                       |    8 +-
+ paper/generated/macros.tex              |    2 +
+ paper/generated/tab_adhoc_prod.tex      |    9 +
+ paper/generated/tab_adhoc_sim.tex       |    9 +
+ paper/generated/tab_hypotheses_prod.tex |    9 +
+ paper/generated/tab_hypotheses_sim.tex  |    9 +
+ paper/generated/tab_ratios_prod.tex     |    8 +
+ paper/generated/tab_ratios_sim.tex      |    8 +
+ paper/generated/tab_sim_vs_prod.tex     |    9 +
+ results/raw/run.jsonl                   | 1891 +++++++++++++++++++++++++++++++
+ results/sim/raw/sim.jsonl               | 1891 +++++++++++++++++++++++++++++++
+ results/simulation_chart.png            |  Bin 0 -> 38142 bytes
+ results/tables/REPORT.md                |   20 +
+ results/tables/comparisons.csv          |    5 +
+ results/tables/hypotheses.csv           |    7 +
+ results/tables/rep_level.csv            |  181 +++
+ results/tables/sim_vs_prod.csv          |    4 +
+ results/tables/summary.csv              |    7 +
+ 21 files changed, 4133 insertions(+), 15 deletions(-)
+
+commit a76241991842bf973dd0a44be6521d8ad94d64be
+Author: kikome christine <kikomechristine2022@gmail.com>
+Date:   Tue Sep 22 19:51:14 2026 +0300
+
+    fix: commit synchronized
+
+ README.md                                      |  9 +--
+ analysis/analyze.py                            |  8 ---
+ analysis/synth.py                              |  3 +-
+ crates/flcommon/src/model.rs                   |  4 +-
+ crates/flcommon/src/select.rs                  |  9 +--
+ crates/flsim/src/main.rs                       |  7 +-
+ docs/00_STATUS_AND_GAPS.md                     | 31 ---------
+ docs/01_PREREGISTRATION.md                     | 94 --------------------------
+ docs/02_BASELINES_AND_TIERS.md                 | 46 -------------
+ docs/03_PRODUCTION_VALIDATION.md               | 37 ----------
+ docs/04_DEMO_AND_VIVA.md                       | 20 ------
+ paper/EDIT_LIST.md                             | 51 --------------
+ paper/generated/.gitkeep                       |  0
+ paper/sections/00_helpers.tex                  | 17 -----
+ paper/sections/01_abstract_revised.tex         | 16 -----
+ paper/sections/02_scope_and_hypotheses.tex     | 26 -------
+ paper/sections/03_experimental_methodology.tex | 54 ---------------
+ paper/sections/04_results.tex                  | 29 --------
+ paper/sections/05_limitations_conclusion.tex   | 10 ---
+ paper/sections/06_related_work_matrix.tex      | 17 -----
+ scripts/net_trace.py                           |  4 +-
+ 21 files changed, 7 insertions(+), 485 deletions(-)
+
+commit 69c3e6ae810f0f0b13ef7f34674b20744a8aa007
+Author: kikome christine <kikomechristine2022@gmail.com>
+Date:   Tue Sep 22 19:27:58 2026 +0300
+
+    fix: commit synchronized lockfile for exam submission
+
+ Cargo.lock | 1688 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 1688 insertions(+)
+
+commit b4f422fcac3b54ffebbf193482da8e1d9d60bcb3
+Author: kikome christine <kikomechristine2022@gmail.com>
+Date:   Tue Sep 22 18:55:00 2026 +0300
+
+    orchestrator creation
+
+ .dockerignore                                  |   6 +
+ .github/workflows/ci.yml                       |  20 +
+ .gitignore                                     |  10 +
+ Cargo.toml                                     |  27 +
+ Makefile                                       |  53 ++
+ analysis/__init__.py                           |   0
+ analysis/analyze.py                            | 427 ++++++++++++++
+ analysis/requirements.txt                      |   6 +
+ analysis/stats.py                              | 125 ++++
+ analysis/synth.py                              |  35 ++
+ analysis/tests/__init__.py                     |   0
+ analysis/tests/test_pipeline.py                |  55 ++
+ analysis/tests/test_stats.py                   |  63 ++
+ config/experiments.json                        |  53 ++
+ config/topology.json                           |  46 ++
+ crates/coordinator/Cargo.toml                  |  13 +
+ crates/coordinator/src/main.rs                 | 449 ++++++++++++++
+ crates/flcommon/Cargo.toml                     |   8 +
+ crates/flcommon/src/lib.rs                     |   7 +
+ crates/flcommon/src/model.rs                   | 162 ++++++
+ crates/flcommon/src/rng.rs                     | 100 ++++
+ crates/flcommon/src/select.rs                  | 263 +++++++++
+ crates/flproto/Cargo.toml                      |  13 +
+ crates/flproto/build.rs                        |   8 +
+ crates/flproto/proto/fl.proto                  |  78 +++
+ crates/flproto/src/lib.rs                      |   4 +
+ crates/flsim/Cargo.toml                        |   9 +
+ crates/flsim/src/main.rs                       | 521 +++++++++++++++++
+ crates/participant/Cargo.toml                  |  11 +
+ crates/participant/src/main.rs                 | 167 ++++++
+ crates/scheduler/Cargo.toml                    |  14 +
+ crates/scheduler/src/main.rs                   | 287 +++++++++
+ deploy/k3s/flreg.yaml                          | 775 +++++++++++++++++++++++++
+ deploy/vm/run_control.sh                       |  15 +
+ deploy/vm/run_node.sh                          |  19 +
+ docker-compose.yml                             | 279 +++++++++
+ docker/Dockerfile                              |  27 +
+ docker/digests.env                             |   5 +
+ docs/00_STATUS_AND_GAPS.md                     |  31 +
+ docs/01_PREREGISTRATION.md                     |  94 +++
+ docs/02_BASELINES_AND_TIERS.md                 |  46 ++
+ docs/03_PRODUCTION_VALIDATION.md               |  37 ++
+ docs/04_DEMO_AND_VIVA.md                       |  20 +
+ paper/EDIT_LIST.md                             |  51 ++
+ paper/generated/.gitkeep                       |   0
+ paper/sections/00_helpers.tex                  |  17 +
+ paper/sections/01_abstract_revised.tex         |  16 +
+ paper/sections/02_scope_and_hypotheses.tex     |  26 +
+ paper/sections/03_experimental_methodology.tex |  54 ++
+ paper/sections/04_results.tex                  |  29 +
+ paper/sections/05_limitations_conclusion.tex   |  10 +
+ paper/sections/06_related_work_matrix.tex      |  17 +
+ policy/residency.rego                          |  23 +
+ policy/residency_test.rego                     |  17 +
+ results/emu/raw/.gitkeep                       |   0
+ results/prod/raw/.gitkeep                      |   0
+ results/sim/raw/.gitkeep                       |   0
+ results/tables/.gitkeep                        |   0
+ rust-toolchain.toml                            |   6 +
+ scripts/gen_deploy.py                          | 215 +++++++
+ scripts/net_trace.py                           |  67 +++
+ scripts/netem.sh                               |  15 +
+ scripts/pin_digests.sh                         |  16 +
+ scripts/run_experiments.py                     | 196 +++++++
+ 64 files changed, 5163 insertions(+)
+
+commit af19a986015a8c4639d826c0cad8c5f326cd5599
+Author: kikome christine <kikomechristine2022@gmail.com>
+Date:   Tue Sep 22 18:53:40 2026 +0300
+
+    first commit
+
+ README.md | 54 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 54 insertions(+)
